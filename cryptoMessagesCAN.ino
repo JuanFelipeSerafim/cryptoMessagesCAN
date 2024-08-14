@@ -24,22 +24,15 @@ struct can_frame {
 //adicionar manualmente biblioteca (via arquivo .zip) do ArduinoDES http://spaniakos.github.io/ArduinoDES/index.html
 
 #include <Crypto.h>
-
 #include <SHA256.h>
-
 #include <string.h>
-
 #include <AES.h>
-
 #include <DES.h>
-
 #include <string.h>
-
 #include <stdio.h>
-
 #include <SPI.h>
-
 #include <mcp2515.h>
+#include <stdlib.h>
 
 #define HASH_SIZE 32 // tamanho maximo da hash -> 32 bytes!!!. vai ficar num vetor de unsigned char
 #define MKRCAN_MCP2515_INT_PIN 2
@@ -55,11 +48,13 @@ unsigned int ids_radar[] = {
   0x202,
   0x203
 }; // #0x200 e 0x200->radar_cfg; 0x202 e 0x203->radar_status
+
 unsigned int ids_cluster[] = {
   0x600,
   0x701,
   0x702
 }; // #0x600->cluster_status; 0x701 e 0x702->cluster_general;
+
 unsigned int ids_object[] = {
   0x60A,
   0x60B,
@@ -67,6 +62,7 @@ unsigned int ids_object[] = {
   0x60D,
   0x60E
 }; // #0x60A->obj_status; 0x60B e 0x60C->obj_general;0x60D e 0x60E->obj_quality
+
 unsigned char mensagemReferencia[] = "12345678"; // cada bloco é 1 byte (pensando no payload CAN). Mas a biblioteca aceita qualquer tamanho de entrada
 
 // instancia os objetos das classes correspondentes
@@ -77,6 +73,21 @@ MCP2515 mcp2515(53); // CHIP SELECT PIN digitalPin->53 (on arduino mega)
 
 //------------------------------------------ Funcoes que serão arduamente reutilizadas------------------------------------------ //
 
+void printCANMessages(struct can_frame * mensagem) {
+  /////////////////////////////////////////////////////////////////
+  Serial.print(mensagem -> can_id, HEX); // print ID
+  Serial.print(" ");
+  Serial.print(mensagem -> can_dlc, HEX); // print DLC
+  Serial.print(" ");
+
+  for (int i = 0; i < mensagem -> can_dlc; i++) { // print the data
+    Serial.print(mensagem -> data[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println(" ");
+  /////////////////////////////////////////////////////////////////
+}
+
 bool verificaOpcoes(unsigned char mensagem) {
   return (mensagem == 0 || mensagem == 1); //retorna true se uma das opcoes for atendida
 }
@@ -86,7 +97,7 @@ uint8_t * hashSHA256(char * payload, uint8_t tamanho) { //TRUNCADO EM TAMANHO!!!
   sha256.reset();
   sha256.update(payload, tamanho);
   sha256.finalize(valorHash, tamanho);
-  return valorHash; // tamanho maximo de tamanho. Ele será truncado!
+  return valorHash; // tamanho maximo de "tamanho". Ele será truncado!
 }
 
 uint8_t * encryptAES(char * payload) { // somente confidencialidade em can FD
@@ -115,49 +126,31 @@ uint8_t * decrypt3DES(char * payload) { // somente confidencialidade em can trad
   return puroTexto; // tamanho maximo de 8 bytes
 }
 
+struct can_frame * prepararFrame(unsigned int id, uint8_t tamanho, uint8_t * payload) {
+  struct can_frame * frame = (struct can_frame * ) malloc(sizeof(struct can_frame));
+  frame -> can_id = id;
+  frame -> can_dlc = tamanho;
+  strcpy(frame -> data, payload);
+  return frame;
+}
+
 void enviarMensagemCAN(uint8_t * msg, unsigned int id, char tamanho) {
   uint8_t temporario[9] = {};
   if (tamanho == -1) {
     strncpy(temporario, msg, 8);
     temporario[8] = '\0';
-    struct can_frame mensagem;
-    mensagem.can_id = id;
-    mensagem.can_dlc = 8;
-    strcpy(mensagem.data, temporario);
-    /////////////////////////////////////////////////////////////////
-    Serial.print(mensagem.can_id, HEX); // print ID
-    Serial.print(" ");
-    Serial.print(mensagem.can_dlc, HEX); // print DLC
-    Serial.print(" ");
-
-    for (int i = 0; i < mensagem.can_dlc; i++) { // print the data
-      Serial.print(mensagem.data[i], HEX);
-      Serial.print(" ");
-    }
-    Serial.println(" ");
-    /////////////////////////////////////////////////////////////////
-    mcp2515.sendMessage( & mensagem);
+    struct can_frame * mensagem = prepararFrame(id, 8, temporario);
+    printCANMessages(mensagem);
+    mcp2515.sendMessage(mensagem);
+    free(mensagem);
     delay(500);
   } else {
     strncpy(temporario, msg, tamanho);
     temporario[tamanho] = '\0';
-    struct can_frame mensagem;
-    mensagem.can_id = id;
-    mensagem.can_dlc = tamanho;
-    strcpy(mensagem.data, temporario);
-    /////////////////////////////////////////////////////////////////
-    Serial.print(mensagem.can_id, HEX); // print ID
-    Serial.print(" ");
-    Serial.print(mensagem.can_dlc, HEX); // print DLC
-    Serial.print(" ");
-
-    for (int i = 0; i < mensagem.can_dlc; i++) { // print the data
-      Serial.print(mensagem.data[i], HEX);
-      Serial.print(" ");
-    }
-    Serial.println(" ");
-    /////////////////////////////////////////////////////////////////
-    mcp2515.sendMessage( & mensagem);
+    struct can_frame * mensagem = prepararFrame(id, tamanho, temporario);
+    printCANMessages(mensagem);
+    mcp2515.sendMessage(mensagem);
+    free(mensagem);
     delay(500);
   }
 
@@ -174,6 +167,7 @@ unsigned char * cryptoMessagesCAN(char * msg, unsigned char canFD, unsigned char
     strcpy(retorno, "Opcao inválida");
     return retorno;
   }
+
   unsigned char len = strlen(msg);
   unsigned char opcao = (canFD << 2) | (confidencialidade << 1) | (integridade << 0);
   switch (opcao) {
@@ -293,24 +287,10 @@ void loop() {
       Serial.println(texto);
       delay(500);
       if (tamMsg < 9) {
-        struct can_frame mensagem;
-        mensagem.can_id = ids_radar[i];
-        mensagem.can_dlc = tamMsg;
-        strcpy(mensagem.data, msgAdulterada);
-        /////////////////////////////////////////////////////////////////
-        Serial.print(mensagem.can_id, HEX); // print ID
-        Serial.print(" ");
-        Serial.print(mensagem.can_dlc, HEX); // print DLC
-        Serial.print(" ");
-
-        for (int i = 0; i < mensagem.can_dlc; i++) { // print the data
-          Serial.print(mensagem.data[i], HEX);
-          Serial.print(" ");
-        }
-        Serial.println(" ");
-        /////////////////////////////////////////////////////////////////
-        mcp2515.sendMessage( & mensagem);
-
+        struct can_frame * mensagem = prepararFrame(ids_radar[i], tamMsg, msgAdulterada);
+        printCANMessages(mensagem);
+        mcp2515.sendMessage(mensagem);
+        free(mensagem);
       } else { //mensagem maior que 8 bytes        
         for (k = 0; k < tamMsg / 8; k++) {
           if (!k) { // caso inicial
@@ -331,23 +311,10 @@ void loop() {
       Serial.println(texto);
       delay(500);
       if (tamMsg < 9) {
-        struct can_frame mensagem;
-        mensagem.can_id = ids_cluster[i];
-        mensagem.can_dlc = tamMsg;
-        strcpy(mensagem.data, msgAdulterada);
-        /////////////////////////////////////////////////////////////////
-        Serial.print(mensagem.can_id, HEX); // print ID
-        Serial.print(" ");
-        Serial.print(mensagem.can_dlc, HEX); // print DLC
-        Serial.print(" ");
-
-        for (int i = 0; i < mensagem.can_dlc; i++) { // print the data
-          Serial.print(mensagem.data[i], HEX);
-          Serial.print(" ");
-        }
-        Serial.println(" ");
-        /////////////////////////////////////////////////////////////////
-        mcp2515.sendMessage( & mensagem);
+        struct can_frame * mensagem = prepararFrame(ids_cluster[i], tamMsg, msgAdulterada);
+        printCANMessages(mensagem);
+        mcp2515.sendMessage(mensagem);
+        free(mensagem);
       } else { //mensagem maior que 8 bytes
         for (k = 0; k < tamMsg / 8; k++) {
           if (!k) { // caso inicial 
@@ -368,25 +335,10 @@ void loop() {
       Serial.println(texto);
       delay(500);
       if (tamMsg < 9) {
-
-        struct can_frame mensagem;
-        mensagem.can_id = ids_object[i];
-        mensagem.can_dlc = tamMsg;
-        strcpy(mensagem.data, msgAdulterada);
-
-        /////////////////////////////////////////////////////////////////
-        Serial.print(mensagem.can_id, HEX); // print ID
-        Serial.print(" ");
-        Serial.print(mensagem.can_dlc, HEX); // print DLC
-        Serial.print(" ");
-
-        for (int i = 0; i < mensagem.can_dlc; i++) { // print the data
-          Serial.print(mensagem.data[i], HEX);
-          Serial.print(" ");
-        }
-        Serial.println(" ");
-        /////////////////////////////////////////////////////////////////
-        mcp2515.sendMessage( & mensagem);
+        struct can_frame * mensagem = prepararFrame(ids_object[i], tamMsg, msgAdulterada);
+        printCANMessages(mensagem);
+        mcp2515.sendMessage(mensagem);
+        free(mensagem);
       } else { //mensagem maior que 8 bytes
         for (k = 0; k < tamMsg / 8; k++) {
           if (!k) { // caso inicial 
@@ -401,7 +353,6 @@ void loop() {
       }
 
     }
-
   }
 
   delay(1500);
